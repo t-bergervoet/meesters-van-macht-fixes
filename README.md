@@ -3,9 +3,10 @@
 Fixes for **De Meesters van Macht** (Dutch kids' game by IJsfontein, 1997, Macromedia Director 6)
 so it runs on 64-bit Windows 10/11, plus full-screen scaling with [Magpie](https://github.com/Blinue/Magpie).
 
-The game files are not in this repo. `apply-fixes.ps1` patches a copy you already have. The Dutch CD
-image is on the Internet Archive as
-[`mvmacht`](https://archive.org/details/mvmacht) ("Meesters van macht cd-rom").
+The game files are not in this repo. `apply-fixes.ps1` patches a copy you already have, or installs
+one from the CD image. The Dutch CD image is on the Internet Archive:
+**[Meesters van macht cd-rom](https://archive.org/details/mvmacht)**. Download `MvM.bin` from its
+[file list](https://archive.org/download/mvmacht).
 
 ## Credits and the English version: *Masters of the Elements*
 
@@ -27,7 +28,8 @@ files. This repo patches the compiled bytecode of your own copy in place and con
 
 ## Usage
 
-1. Copy the `MvM` folder from the CD (or disc image) to your PC, e.g. `C:\Games\MvM`.
+1. Download `MvM.bin` from the [Internet Archive](https://archive.org/download/mvmacht) (about 700 MB),
+   and install [7-Zip](https://www.7-zip.org/).
 2. Download this repo (Code → Download ZIP) and unzip it.
 3. In that folder, open PowerShell and run:
 
@@ -35,11 +37,13 @@ files. This repo patches the compiled bytecode of your own copy in place and con
 powershell -ExecutionPolicy Bypass -File .\apply-fixes.ps1 -GameDir 'C:\Games\MvM' -DiscImage 'C:\path\to\MvM.bin' -InstallMagpie
 ```
 
+   If `C:\Games\MvM` doesn't exist yet, the script installs the game there from the disc image. If you
+   already copied the `MvM` folder from a real CD, point `-GameDir` at it instead.
 4. Start the game with **`Meesters van Macht.lnk`** in the game folder.
 
 | Parameter | |
 |---|---|
-| `-GameDir` | Folder containing `MvM.exe` (any location; spaces are fine) |
+| `-GameDir` | Folder containing `MvM.exe`, or a new/empty folder to install into when `-DiscImage` is given (any location; spaces are fine) |
 | `-DiscImage` | `.bin` (raw MODE1/2352) or `.iso` of the Dutch CD. Restores files missing from the install and copies `SMXTRA.X32` (SetMouseXtra) from the CD's *Webmaster demo* folder. Needed on the first run unless `Xtras\SMXTRA.X32` is already there. Needs [7-Zip](https://www.7-zip.org/) (override its path with `-SevenZip`) |
 | `-InstallMagpie` | Optional. Downloads [Magpie](https://github.com/Blinue/Magpie) v0.12.1 (checksum-verified) and adds a full-screen profile |
 | `-SkipRegistry`, `-SkipShortcut` | Leave out the per-user parts (compat flags, launcher shortcut) |

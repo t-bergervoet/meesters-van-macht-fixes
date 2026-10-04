@@ -30,9 +30,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# With -DiscImage the game folder may be new or empty: step 1 then installs the game from the CD image.
+if ($DiscImage -and -not (Test-Path $GameDir)) { New-Item -ItemType Directory $GameDir | Out-Null }
 $GameDir = (Resolve-Path $GameDir).Path
 $exe = Join-Path $GameDir 'MvM.exe'
-if (-not (Test-Path $exe)) { throw "MvM.exe not found in $GameDir" }
+if (-not (Test-Path $exe) -and -not $DiscImage) { throw "MvM.exe not found in $GameDir (pass -DiscImage to install it from the CD image)" }
 
 $MagpieVersion = 'v0.12.1'
 $MagpieSha256  = '8bc8bc233438f546b7996b00b21d7376f4f7d3d8a4940e6a8800babd2225b2de'
@@ -132,7 +134,7 @@ if (-not $DiscImage) {
         } else {
             $iso = $DiscImage
         }
-        & $SevenZip x $iso 'MvM\Data\*' 'MvM\Xtras\*' 'Webmaster demo\Xtras\Windows\SMXtra.X32' "-o$tmp\x" -y | Out-Null
+        & $SevenZip x $iso 'MvM\MvM.exe' 'MvM\Data\*' 'MvM\Xtras\*' 'Webmaster demo\Xtras\Windows\SMXtra.X32' "-o$tmp\x" -y | Out-Null
         $root = Join-Path $tmp 'x\MvM'
         $restored = 0
         Get-ChildItem -Recurse -File $root | Where-Object Name -ne 'PUTCURS.DLL' | ForEach-Object {
@@ -160,6 +162,7 @@ if (-not $DiscImage) {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     }
 }
+if (-not (Test-Path $exe)) { throw "MvM.exe not found in $GameDir, and the CD image did not contain it." }
 
 # ---------------------------------------------------------------------------------------------
 Write-Step '2. Patch scripts.cst: replace the 16-bit Putcurs XObject with SetMouseXtra'
