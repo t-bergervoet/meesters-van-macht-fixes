@@ -19,8 +19,8 @@ and publishes ready-made patches for every language in the
 This repo was worked out independently on the Dutch CD and then improved using that series. Two
 fixes come from it: using SetMouseXtra in place of `PUTCURS.DLL`, and removing the intro's
 `puppetPalette` call. In return, this repo adds a few things the series doesn't cover: the hang on
-focus loss (fix 6), the single-core launcher (fix 5), and Magpie scaling instead of switching the
-screen to 640×480.
+focus loss (fix 6), the single-core launcher (fix 5), a fix for saved games that break navigation
+(fix 8), and Magpie scaling instead of switching the screen to 640×480.
 
 How the two differ: Felsqualle recompiled the scripts in Director 6 and ships the modified game
 files. This repo patches the compiled bytecode of your own copy in place and contains no game files.
@@ -63,6 +63,7 @@ upgrades it.
 | 5 | Random hangs during play | Director 6 sound mixer is not multi-core safe | Launcher runs the game with CPU affinity 1 |
 | 6 | Hangs ~15–20 s after Alt-Tab or a notification, then closes | Projector pauses itself when it loses focus and deadlocks | Set "animate in background" bit in `MvM.exe`'s projector header |
 | 7 | Tiny 640×480 picture | Fixed stage size | Magpie profile: crop the black border, scale to full screen (4:3 kept) |
+| 8 | After loading a save, drag gestures (e.g. on the train) just click and never move | The save was made with the electricity-room wire puzzle unfinished, so it stores `handvatState = #turn` ("handle held"). The global `clickBackground` ignores every navigation drag in that state | Bytecode patch: `initElecFromFile` resets a loaded `#turn` (see below). Fixes old saves too, at load time |
 
 ### Things that did *not* work
 
@@ -70,8 +71,12 @@ upgrades it.
   every sound effect on Windows goes through `letsHear` → `playDsSound`, which plays nothing without
   it. Music and voices still play, so the problem isn't obvious. With fixes 5 and 6 in place the
   Xtra no longer hangs.
-- **`640X480` compatibility mode** (Windows switches resolution): fills the screen, but the game hangs
-  as soon as it loses focus, even with fix 6. Don't use it.
+- **`640X480` compatibility mode** (Windows switches resolution): without fix 6 the game hangs as soon
+  as it loses focus. With fix 6 it survived a 40-second focus-loss test, so it's an option, but the
+  GPU-stretched picture is blurrier than Magpie's.
+- **Blaming the mouse patch for broken gestures.** For a while it looked as if SetMouseXtra (fix 2)
+  broke the train gesture. The real cause was a saved game (fix 8): every test had loaded the same
+  save.
 - **Stubbing out `Putcurs`** without a replacement. The game runs, but the drag-and-drop puzzles
   break (fix 3).
 - **Renaming `Putcurs` to a built-in** (`objectp`): `Putcurs(mNew)` is compiled as an old-style method
@@ -113,6 +118,25 @@ end
 | `exitCursorObject` +29 | `89 0154` (start of `closeXLib`) | `93 0019` jmp to `ret` |
 | `moveTheCursor` +0 | `89 0151` getglobal myMouse (the `objectp` guard) | `93 0010` jmp +16 |
 | `moveTheCursor` +60 (30 bytes) | `pushsymb #mSet`, x, y, `pusharglistnoret 3`, `pushvarref myMouse`, `objcallv4` | x, y, `pusharglistnoret 2`, `extcall SetMouse`, `jmp +5`, 2 filler bytes |
+
+### `Data\Global\scripts.cst` – `initElecFromFile`
+
+Saved games are Lingo commands, encoded (each character inverted as `255 − c`, random filler
+characters ≥ 128 mixed in, a one-byte checksum at the end) and run with `do` on load. The electricity
+room's line restores `handvatState` from slot 3. After patching:
+
+```lingo
+on initElecFromFile theList
+  if listP(theList) then             -- the redundant "count(theList) = 11" test is gone
+    set batteryLevel = getAt(theList, 1)
+    set firstHandvatFinish = getAt(theList, 2)
+    set handvatState = getAt(theList, 3)
+    if handvatState = #turn then set handvatState = 0   -- initHandvat makes this #lamp
+    ...
+```
+
+The 12 bytes of the count test pay for the new check, so the code keeps its length. `#move` isn't
+checked, because it only exists while the mouse button is held inside the puzzle and can't be saved.
 
 ### `Data\Intro\intro.dir` – `startIntro`
 
@@ -164,3 +188,19 @@ files. It was used to find the patches above.
 ```sh
 perl tools/lingo-disasm.pl Data/Global/scripts.cst 'CursorObject|moveTheCursor'
 ```
+
+## Credits
+
+- **[Felsqualle](https://felsqualle.com/)**, for the series
+  [*Saving the Masters of the Elements*](https://felsqualle.com/posts/2025/05/saving-the-masters-of-the-elements-part-1/)
+  ([part 2](https://felsqualle.com/posts/2025/07/saving-the-masters-of-the-elements-part-2/),
+  [part 3](https://felsqualle.com/posts/2025/07/saving-the-masters-of-the-elements-part-3/),
+  [part 4](https://felsqualle.com/posts/2025/08/saving-the-masters-of-the-elements-part-4/),
+  [part 5](https://felsqualle.com/posts/2025/10/saving-the-masters-of-the-elements-part-5/),
+  [epilogue](https://felsqualle.com/posts/2025/10/saving-the-masters-of-the-elements-epilogue/)).
+  This repo's SetMouseXtra replacement for `PUTCURS.DLL` (fixes 2 and 3) and the `puppetPalette`
+  fix (fix 4) come from parts 3 and 4. The series is also the place to go for the other language
+  versions.
+- **Stephan Eichhorn / Scirius Development**, for SetMouseXtra (`SMXTRA.X32`).
+- **[Blinue](https://github.com/Blinue/Magpie)**, for Magpie.
+- **IJsfontein**, who made the game in 1997.

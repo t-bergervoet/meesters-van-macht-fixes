@@ -9,6 +9,7 @@
       1. Restore files missing from the install (sound files) and copy SMXTRA.X32 from the CD image.
       2. Patch Data\Global\scripts.cst to move the mouse pointer with SetMouseXtra instead of the
          16-bit Putcurs XObject, and Data\Intro\intro.dir so the menu appears without mouse-over.
+         Saved games with the electricity puzzle unfinished no longer break navigation on load.
       3. Patch MvM.exe's projector header so the game keeps running when it loses focus.
       4. Make sure the DirectSound Xtra is enabled (all sound effects depend on it).
       5. Set compatibility flags (HIGHDPIAWARE, DWM8And16BitMitigation).
@@ -164,6 +165,8 @@ if (-not $DiscImage) {
 Write-Step '2. Patch scripts.cst: replace the 16-bit Putcurs XObject with SetMouseXtra'
 # The game warps the mouse pointer during drag-and-drop puzzles (matchbox, pan, maze). The original
 # 16-bit PUTCURS.DLL cannot load on 64-bit Windows; SetMouseXtra (SMXTRA.X32, 32-bit, same CD) can.
+# Approach from Felsqualle, "Saving the Masters of the Elements" part 3:
+# https://felsqualle.com/posts/2025/07/saving-the-masters-of-the-elements-part-3/
 # Equivalent Lingo after patching:
 #   on initCursorObject  -- Windows branch: no openXLib, no Putcurs(mNew)
 #   on exitCursorObject  -- Windows branch: no closeXLib
@@ -204,13 +207,31 @@ Invoke-BytePatch $cst @(
 # ---------------------------------------------------------------------------------------------
 Write-Step '2b. Patch intro.dir: remove the palette fade that hides the menu'
 # startIntro calls puppetPalette("black palette", 25). On 32-bit colour Windows this breaks the
-# 256-colour palette mapping and menu buttons only appear on mouse-over (Felsqualle, part 4).
+# 256-colour palette mapping and menu buttons only appear on mouse-over. Found by Felsqualle:
+# https://felsqualle.com/posts/2025/08/saving-the-masters-of-the-elements-part-4/
 #   44 20 pushcons | 41 19 pushint 25 | 42 02 pusharglistnoret 2 | 57 43 extcall puppetPalette
 # -> 93 0008 jmp +8 | 5 filler bytes. The trailing "42 00 57 44" (updateStage) anchors the match.
 Invoke-BytePatch (Join-Path $GameDir 'Data\Intro\intro.dir') @(
     @{ Name = 'startIntro puppetPalette'
        From = '4420411942025743 42005744'
        To   = '9300080000000000 42005744' }
+)
+
+# ---------------------------------------------------------------------------------------------
+Write-Step '2c. Patch scripts.cst: ignore a "handle held" state in saved games'
+# Saving while the electricity-room wire puzzle is unfinished stores handvatState = #turn.
+# clickBackground starts with "if handvatState = #turn or #move then exit", so after loading such a
+# save every navigation drag in every room is ignored. initElecFromFile now resets #turn to 0;
+# initHandvat turns that into #lamp (handle at the start) when the room is entered.
+# (#move only exists while the mouse button is held inside the puzzle, so it cannot be saved.)
+# Room for the check comes from dropping the redundant "count(theList) = 11" test (listP stays):
+#   +10  count check (12 bytes) + slots 1-3 (32 bytes)
+#   ->   slots 1-3 | 49 4f getglobal handvatState | 45 a0 pushsymb #turn | 0f eq
+#        95 0007 jmpifz +7 | 03 push0 | 8f 004f setglobal handvatState
+Invoke-BytePatch $cst @(
+    @{ Name = 'initElecFromFile'
+       From = '4b00430197017c950086 4b004301578c410b0f95007a 4b004101430257598f0205 4b004102430257598f0206 4b004103430257594f4f'
+       To   = '4b00430197017c950086 4b004101430257598f0205 4b004102430257598f0206 4b004103430257594f4f 494f45a00f950007038f004f' }
 )
 
 # ---------------------------------------------------------------------------------------------
