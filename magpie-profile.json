@@ -1,0 +1,16 @@
+{
+    "name": "Meesters van Macht",
+    "packaged": false,
+    "pathRule": "",
+    "classNameRule": "ASIMainWndClass",
+    "launcherPath": "",
+    "autoScale": true,
+    "scalingMode": 0,
+    "croppingEnabled": true,
+    "cropping": {
+        "left": 960.0,
+        "top": 560.0,
+        "right": 960.0,
+        "bottom": 560.0
+    }
+}

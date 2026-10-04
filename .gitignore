@@ -1,0 +1,9 @@
+# Never commit game files
+*.exe
+*.dll
+*.x32
+*.dir
+*.cst
+*.bin
+*.iso
+*.orig
