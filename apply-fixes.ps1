@@ -6,10 +6,11 @@
     Applies every fix from this repo to an installed copy of the game. Safe to run more than once:
     each step checks whether it has already been applied. Originals are kept as *.orig.
 
-      1. Restore files missing from the install (PUTCURS.DLL, sound files) from the CD image.
-      2. Patch Data\Global\scripts.cst so the game no longer creates the 16-bit Putcurs XObject.
+      1. Restore files missing from the install (sound files) and copy SMXTRA.X32 from the CD image.
+      2. Patch Data\Global\scripts.cst to move the mouse pointer with SetMouseXtra instead of the
+         16-bit Putcurs XObject, and Data\Intro\intro.dir so the menu appears without mouse-over.
       3. Patch MvM.exe's projector header so the game keeps running when it loses focus.
-      4. Disable the 1996 DirectSound Xtra (deadlocks on modern Windows).
+      4. Make sure the DirectSound Xtra is enabled (all sound effects depend on it).
       5. Set compatibility flags (HIGHDPIAWARE, DWM8And16BitMitigation).
       6. Create a "Meesters van Macht" launcher shortcut (single CPU core, starts Magpie).
       7. Optionally install Magpie and add a full-screen scaling profile for the game.
@@ -81,13 +82,38 @@ public static int[] PrimarySize() {
 }
 
 function ConvertFrom-Hex([string] $hex) {
+    $hex = $hex -replace '\s', ''
     [byte[]] ($hex -split '(..)' | Where-Object { $_ } | ForEach-Object { [Convert]::ToByte($_, 16) })
+}
+
+function Invoke-BytePatch([string] $path, [object[]] $patches) {
+    # Each patch is @{ Name; From; To } (hex). Every pattern is checked before anything is written,
+    # so a file is either fully patched or left untouched. A pattern occurring more than once is
+    # patched everywhere (Director files keep stale copies of old chunks).
+    $bytes = [IO.File]::ReadAllBytes($path)
+    $plan = foreach ($p in $patches) {
+        $from = ConvertFrom-Hex $p.From; $to = ConvertFrom-Hex $p.To
+        if ($from.Length -ne $to.Length) { throw "$($p.Name): patch changes length" }
+        $hits = @(Find-Bytes $bytes $from)
+        if ($hits.Count -eq 0) {
+            if (@(Find-Bytes $bytes $to).Count -gt 0) { Write-Host "  $($p.Name): already patched."; continue }
+            throw "$(Split-Path -Leaf $path): '$($p.Name)' not found - unknown version of the game? Nothing was changed."
+        }
+        @{ Name = $p.Name; To = $to; Hits = $hits }
+    }
+    if (-not $plan) { return }
+    Backup-Once $path
+    foreach ($p in $plan) {
+        foreach ($h in $p.Hits) { [Array]::Copy($p.To, 0, $bytes, $h, $p.To.Length) }
+        Write-Host "  $($p.Name): patched at offset(s) $($p.Hits -join ', ')."
+    }
+    [IO.File]::WriteAllBytes($path, $bytes)
 }
 
 # ---------------------------------------------------------------------------------------------
 Write-Step '1. Restore missing files from the CD image'
 if (-not $DiscImage) {
-    Write-Host 'No -DiscImage given; skipping. (Xtras\PUTCURS.DLL must exist or the game stops with "XLib file not found".)'
+    Write-Host 'No -DiscImage given; skipping. (Xtras\SMXTRA.X32 must already be present.)'
 } else {
     if (-not (Test-Path $SevenZip)) { throw "7-Zip not found at $SevenZip" }
     $tmp = Join-Path $env:TEMP "mvm-fixes-$PID"
@@ -105,10 +131,10 @@ if (-not $DiscImage) {
         } else {
             $iso = $DiscImage
         }
-        & $SevenZip x $iso 'MvM\Data\*' 'MvM\Xtras\*' "-o$tmp\x" -y | Out-Null
+        & $SevenZip x $iso 'MvM\Data\*' 'MvM\Xtras\*' 'Webmaster demo\Xtras\Windows\SMXtra.X32' "-o$tmp\x" -y | Out-Null
         $root = Join-Path $tmp 'x\MvM'
         $restored = 0
-        Get-ChildItem -Recurse -File $root | ForEach-Object {
+        Get-ChildItem -Recurse -File $root | Where-Object Name -ne 'PUTCURS.DLL' | ForEach-Object {
             $rel = $_.FullName.Substring($root.Length + 1)
             $target = Join-Path $GameDir $rel
             $disabled = Join-Path $GameDir ('Xtras (disabled)\' + $_.Name)
@@ -119,6 +145,15 @@ if (-not $DiscImage) {
                 $restored++
             }
         }
+        # SetMouseXtra ships on the same CD (in the Webmaster demo); it replaces PUTCURS.DLL.
+        $smx = Join-Path $tmp 'x\Webmaster demo\Xtras\Windows\SMXtra.X32'
+        $smxTarget = Join-Path $GameDir 'Xtras\SMXTRA.X32'
+        if ((Test-Path $smx) -and -not (Test-Path $smxTarget)) {
+            New-Item -ItemType Directory -Force (Split-Path $smxTarget) | Out-Null
+            Copy-Item $smx $smxTarget
+            Write-Host '  restored Xtras\SMXTRA.X32 (from Webmaster demo)'
+            $restored++
+        }
         Write-Host "  $restored file(s) restored."
     } finally {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
@@ -126,27 +161,57 @@ if (-not $DiscImage) {
 }
 
 # ---------------------------------------------------------------------------------------------
-Write-Step '2. Patch scripts.cst: skip the 16-bit Putcurs XObject'
-# initCursorObject compiles "set myMouse = Putcurs(mNew)" to:
-#   85 0156 pushsymb mnew | 43 01 pusharglist 1 | 86 0155 pushvarref Putcurs | 58 01 objcallv4 | 8f 0151 setglobal myMouse
-# Replaced with: 03 push0 | 93 0009 jmp +9 (to the setglobal) | 6 filler bytes  => set myMouse = 0
-# moveTheCursor already does "if not objectp(myMouse) then return", so cursor warping is skipped cleanly.
-$cst = Join-Path $GameDir 'Data\Global\scripts.cst'
-$orig = ConvertFrom-Hex '850156430186015558018f0151'
-$patched = ConvertFrom-Hex '039300090000000000008f0151'
-$bytes = [IO.File]::ReadAllBytes($cst)
-$todo = @(Find-Bytes $bytes $orig)
-$done = @(Find-Bytes $bytes $patched)
-if ($todo.Count -eq 0 -and $done.Count -gt 0) {
-    Write-Host '  already patched.'
-} elseif ($todo.Count -eq 0) {
-    throw 'scripts.cst: Putcurs bytecode not found - unknown version of the game?'
-} else {
-    Backup-Once $cst
-    foreach ($p in $todo) { [Array]::Copy($patched, 0, $bytes, $p, $patched.Length) }
-    [IO.File]::WriteAllBytes($cst, $bytes)
-    Write-Host "  patched $($todo.Count) location(s) at offset(s) $($todo -join ', ')."
+Write-Step '2. Patch scripts.cst: replace the 16-bit Putcurs XObject with SetMouseXtra'
+# The game warps the mouse pointer during drag-and-drop puzzles (matchbox, pan, maze). The original
+# 16-bit PUTCURS.DLL cannot load on 64-bit Windows; SetMouseXtra (SMXTRA.X32, 32-bit, same CD) can.
+# Equivalent Lingo after patching:
+#   on initCursorObject  -- Windows branch: no openXLib, no Putcurs(mNew)
+#   on exitCursorObject  -- Windows branch: no closeXLib
+#   on moveTheCursor x,y -- no objectp(myMouse) guard; SetMouse(integer(x+offSetX), integer(y+offSetY))
+if (-not (Test-Path (Join-Path $GameDir 'Xtras\SMXTRA.X32'))) {
+    throw 'Xtras\SMXTRA.X32 is missing. Rerun with -DiscImage (it is copied from the CD''s Webmaster demo).'
 }
+$cst = Join-Path $GameDir 'Data\Global\scripts.cst'
+$cstPatches = @(
+    # Undo the previous version of this fix ("set myMouse = 0") so the handler matches again.
+    @{ Name = 'undo old Putcurs stub'
+       From = '039300090000000000008f0151'
+       To   = '850156430186015558018f0151' }
+)
+$bytes = [IO.File]::ReadAllBytes($cst)
+if (@(Find-Bytes $bytes (ConvertFrom-Hex $cstPatches[0].From)).Count -gt 0) { Invoke-BytePatch $cst $cstPatches }
+Invoke-BytePatch $cst @(
+    # Name table (shared by all scripts in the cast): "Putcurs" -> "SetMouse", "mnew" -> "mne".
+    # Same total length. Both names are only used by initCursorObject.
+    @{ Name = 'name table'
+       From = '0a 6f626a65637450617468 07 50757463757273 04 6d6e6577 09 4d6f76654d6f757365'
+       To   = '0a 6f626a65637450617468 08 5365744d6f757365 03 6d6e65 09 4d6f76654d6f757365' }
+    # initCursorObject: offset 29 "getglobal objectPath" (start of openXLib) -> jmp +51 to ret.
+    @{ Name = 'initCursorObject'
+       From = '890151430197015095000d8501524201860151580149c345c40f95001e 890154 44000a4201970153850156430186015558018f015193001b89015444080a4201970153850156430186015758018f015101'
+       To   = '890151430197015095000d8501524201860151580149c345c40f95001e 930033 44000a4201970153850156430186015558018f015193001b89015444080a4201970153850156430186015758018f015101' }
+    # exitCursorObject: offset 29 (start of closeXLib) -> jmp +25 to ret.
+    @{ Name = 'exitCursorObject'
+       From = '890151430197015095000d8501524201860151580149c345c40f950011 890154 44100a420197015893000e89015444180a420197015801'
+       To   = '890151430197015095000d8501524201860151580149c345c40f950011 930019 44100a420197015893000e89015444180a420197015801' }
+    # moveTheCursor: offset 0 guard -> jmp +16; offset 60..89 "myMouse(mSet, a, b)" ->
+    #   a | b | pusharglistnoret 2 | extcall SetMouse (name 0x155) | jmp +5 | 2 filler bytes
+    @{ Name = 'moveTheCursor'
+       From = '890151 4301970150149500074200573549c345c40f9500484300a6015a41049f015b44200f04058f01594300a6015d412a9f015b44280f04058f015c 85015e 4b0089015905430157974b0889015c0543015797 4203 860151 5801 93001985015f4b00430157974b08430157974203860151580143006689520001'
+       To   = '930010 4301970150149500074200573549c345c40f9500484300a6015a41049f015b44200f04058f01594300a6015d412a9f015b44280f04058f015c 4b0089015905430157974b0889015c0543015797 4202 970155 930005 0000 93001985015f4b00430157974b08430157974203860151580143006689520001' }
+)
+
+# ---------------------------------------------------------------------------------------------
+Write-Step '2b. Patch intro.dir: remove the palette fade that hides the menu'
+# startIntro calls puppetPalette("black palette", 25). On 32-bit colour Windows this breaks the
+# 256-colour palette mapping and menu buttons only appear on mouse-over (Felsqualle, part 4).
+#   44 20 pushcons | 41 19 pushint 25 | 42 02 pusharglistnoret 2 | 57 43 extcall puppetPalette
+# -> 93 0008 jmp +8 | 5 filler bytes. The trailing "42 00 57 44" (updateStage) anchors the match.
+Invoke-BytePatch (Join-Path $GameDir 'Data\Intro\intro.dir') @(
+    @{ Name = 'startIntro puppetPalette'
+       From = '4420411942025743 42005744'
+       To   = '9300080000000000 42005744' }
+)
 
 # ---------------------------------------------------------------------------------------------
 Write-Step '3. Patch MvM.exe: keep running in the background'
@@ -173,17 +238,21 @@ if ($bytes[$flagPos] -band 0x02) {
 }
 
 # ---------------------------------------------------------------------------------------------
-Write-Step '4. Disable the DirectSound Xtra'
-# DSOUND_R.X32 (1996) deadlocks on the first menu click. Without it the game's own
-# initDirectSound falls back to Director's built-in sound.
+Write-Step '4. Keep the DirectSound Xtra enabled'
+# On Windows, every sound effect goes through letsHear -> playDsSound, which only plays when
+# DSOUND_R.X32 is loaded; without it effects are silently dropped (music and voices still play).
+# An earlier version of this script disabled it because the menu hung on the first click; that
+# hang does not occur with the single-core launcher and the background flag from step 3.
 $xtra = Join-Path $GameDir 'Xtras\DSOUND_R.X32'
+$disabled = Join-Path $GameDir 'Xtras (disabled)\DSOUND_R.X32'
 if (Test-Path $xtra) {
-    $disabledDir = Join-Path $GameDir 'Xtras (disabled)'
-    New-Item -ItemType Directory -Force $disabledDir | Out-Null
-    Move-Item $xtra $disabledDir -Force
-    Write-Host '  moved to "Xtras (disabled)".'
+    Write-Host '  enabled.'
+} elseif (Test-Path $disabled) {
+    Move-Item $disabled $xtra
+    Remove-Item (Split-Path $disabled) -ErrorAction SilentlyContinue   # only if now empty
+    Write-Host '  re-enabled (moved back from "Xtras (disabled)").'
 } else {
-    Write-Host '  already disabled.'
+    Write-Warning 'Xtras\DSOUND_R.X32 is missing: sound effects will be silent. Rerun with -DiscImage.'
 }
 
 # ---------------------------------------------------------------------------------------------
