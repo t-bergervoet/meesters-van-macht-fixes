@@ -53,6 +53,33 @@ function Find-Bytes([byte[]] $haystack, [byte[]] $needle) {
     return $hits
 }
 
+function Get-PrimaryScreenSize {
+    # Physical pixels of the primary display's current mode, independent of DPI scaling and of
+    # how many GPUs/monitors there are. The projector runs full screen on the primary display.
+    Add-Type -Namespace MvmFixes -Name Display -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+    public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; public int dmFields;
+    public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+    public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+    public short dmLogPixels; public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+    public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+}
+[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
+public static int[] PrimarySize() {
+    var dm = new DEVMODE(); dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+    if (!EnumDisplaySettings(null, -1, ref dm)) return null;   // -1 = ENUM_CURRENT_SETTINGS
+    return new[] { dm.dmPelsWidth, dm.dmPelsHeight };
+}
+'@ -ErrorAction SilentlyContinue
+    $size = [MvmFixes.Display]::PrimarySize()
+    if (-not $size) { throw 'Could not read the primary display mode.' }
+    [pscustomobject]@{ Width = $size[0]; Height = $size[1] }
+}
+
 function ConvertFrom-Hex([string] $hex) {
     [byte[]] ($hex -split '(..)' | Where-Object { $_ } | ForEach-Object { [Convert]::ToByte($_, 16) })
 }
@@ -209,7 +236,7 @@ if (-not $InstallMagpie) {
         Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
         $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
         if ($hash -ne $MagpieSha256) { Remove-Item $zip; throw "Magpie download checksum mismatch: $hash" }
-        & $SevenZip x $zip "-o$MagpieDir" -y | Out-Null
+        Expand-Archive $zip -DestinationPath $MagpieDir -Force
         Remove-Item $zip
         Write-Host "  installed Magpie $MagpieVersion to $MagpieDir"
     } else {
@@ -234,12 +261,10 @@ if (-not $InstallMagpie) {
     $gameProfile.pathRule = $exe
     $gameProfile.launcherPath = Join-Path $GameDir 'Meesters van Macht.lnk'
     # The projector centres the 640x480 stage on a full-screen window: crop the border away.
-    $vc = Get-CimInstance Win32_VideoController | Where-Object CurrentHorizontalResolution | Select-Object -First 1
-    if ($vc) {
-        $gameProfile.cropping.left = $gameProfile.cropping.right = [double](($vc.CurrentHorizontalResolution - 640) / 2)
-        $gameProfile.cropping.top = $gameProfile.cropping.bottom = [double](($vc.CurrentVerticalResolution - 480) / 2)
-        Write-Host "  screen $($vc.CurrentHorizontalResolution)x$($vc.CurrentVerticalResolution): crop $($gameProfile.cropping.left) / $($gameProfile.cropping.top) px"
-    }
+    $screen = Get-PrimaryScreenSize
+    $gameProfile.cropping.left = $gameProfile.cropping.right = [double](($screen.Width - 640) / 2)
+    $gameProfile.cropping.top = $gameProfile.cropping.bottom = [double](($screen.Height - 480) / 2)
+    Write-Host "  primary screen $($screen.Width)x$($screen.Height): crop $($gameProfile.cropping.left) / $($gameProfile.cropping.top) px"
     # Start from Magpie's own default profile so any fields we don't set keep valid defaults.
     $merged = $json.profiles[0] | ConvertTo-Json -Depth 10 | ConvertFrom-Json
     foreach ($prop in $gameProfile.PSObject.Properties) {

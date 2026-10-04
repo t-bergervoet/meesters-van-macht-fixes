@@ -3,22 +3,45 @@
 Fixes for **De Meesters van Macht** (Dutch kids' game, 1997, Macromedia Director 6) so it runs on
 64-bit Windows 10/11, plus full-screen scaling with [Magpie](https://github.com/Blinue/Magpie).
 
-The game files are not in this repo. `apply-fixes.ps1` patches an existing install. The CD image is on
-the Internet Archive as `mvmacht` ("Meesters van macht cd-rom").
+The game files are not in this repo. `apply-fixes.ps1` patches a copy you already have. The Dutch CD
+image is on the Internet Archive as
+[`mvmacht`](https://archive.org/details/mvmacht) ("Meesters van macht cd-rom").
+
+## English version: *Masters of the Elements*
+
+The game was also released in English as **Masters of the Elements**. It's the same Director 6 game,
+so it very likely has the same problems: the 16-bit `PUTCURS.DLL`, the DirectSound Xtra, and the hang
+on focus loss.
+
+**These fixes have only been tested on the Dutch CD.** The script looks for the exact byte patterns
+it patches rather than fixed offsets, and stops without changing anything if a pattern isn't found.
+So it's safe to try on the English version, but it may refuse. If you have the English version and
+it works (or doesn't), please open an issue.
 
 ## Usage
 
+1. Copy the `MvM` folder from the CD (or disc image) to your PC, e.g. `C:\Games\MvM`.
+2. Download this repo (Code → Download ZIP) and unzip it.
+3. In that folder, open PowerShell and run:
+
 ```powershell
-.\apply-fixes.ps1 -GameDir 'C:\Users\tberg\Documents\Games\MvM' `
-                  -DiscImage 'C:\Users\tberg\Documents\Games\MvM\Disc image (Internet Archive)\MvM.bin' `
-                  -InstallMagpie
+powershell -ExecutionPolicy Bypass -File .\apply-fixes.ps1 -GameDir 'C:\Games\MvM' -DiscImage 'C:\path\to\MvM.bin' -InstallMagpie
 ```
 
-Then start the game with **`Meesters van Macht.lnk`** in the game folder.
+4. Start the game with **`Meesters van Macht.lnk`** in the game folder.
 
-- Requires 7-Zip (`C:\Program Files\7-Zip\7z.exe`, override with `-SevenZip`).
-- Safe to rerun: every step checks whether it is already applied. Patched files keep a `*.orig` copy.
-- `-SkipRegistry` / `-SkipShortcut` leave out the per-user parts (compat flags, shortcut).
+| Parameter | |
+|---|---|
+| `-GameDir` | Folder containing `MvM.exe` (any location; spaces are fine) |
+| `-DiscImage` | Optional. `.bin` (raw MODE1/2352) or `.iso`. Restores files missing from the install, including `Xtras\PUTCURS.DLL`, which the game needs even though it can't use it. Needs [7-Zip](https://www.7-zip.org/) (override its path with `-SevenZip`) |
+| `-InstallMagpie` | Optional. Downloads [Magpie](https://github.com/Blinue/Magpie) v0.12.1 (checksum-verified) and adds a full-screen profile |
+| `-SkipRegistry`, `-SkipShortcut` | Leave out the per-user parts (compat flags, launcher shortcut) |
+
+**Requirements:** 64-bit (x64) Windows 10 or 11 and the built-in Windows PowerShell 5.1. No admin rights
+needed: everything is per-user.
+
+The script is safe to rerun. Every step checks whether it was already applied, and patched files keep a
+`*.orig` copy next to them.
 
 ## Problems and fixes
 
@@ -85,8 +108,9 @@ so Magpie gets a sharp 640×480 source.
 
 `magpie-profile.json` is merged into `%LOCALAPPDATA%\Magpie\config\v4\config.json`. The profile
 matches window class `ASIMainWndClass` and auto-scales. The projector centres the 640×480 stage on a
-full-screen window, so the script sets the crop to `(width − 640) / 2` and `(height − 480) / 2` for
-the current screen (960/560 px at 2560×1600). The script also enables `allowScalingMaximized`,
+full-screen window on the primary display. The script reads that display's resolution in physical
+pixels and sets the crop to `(width − 640) / 2` and `(height − 480) / 2` (960/560 px at 2560×1600).
+If you change resolution or primary monitor later, rerun with `-InstallMagpie`. The script also enables `allowScalingMaximized`,
 because the projector window covers the whole screen, and turns off Magpie's update check.
 
 ## Tools
